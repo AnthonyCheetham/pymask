@@ -36,41 +36,36 @@ def phase_binary(u, v, wavel, p,return_cvis=False):
         - p[2] = contrast ratio (primary/secondary)
         
         optional:
-        - p[3] = angular size of primary (mas)
-        - p[4] = angular size of secondary (mas)
+        - p[2:] = contrast ratio for several wavelengths that we want
+                 to calculate the cps over
 
         - u,v: baseline coordinates (meters)
         - wavel: wavelength (meters)
         ---------------------------------------------------------------- '''
-
         p = np.array(p)
         # relative locations
         th = (p[1] + 90.0) * np.pi / 180.0
         ddec =  mas2rad(p[0] * np.sin(th))
         dra  = -mas2rad(p[0] * np.cos(th))
 
-        # baselines into number of wavelength
-        x = np.sqrt(u*u+v*v)/wavel
-
-        # decompose into two "luminosity"
-        l2 = 1. / (p[2] + 1)
+        # decompose into two "luminosities"
+        # but first, a little trick so this works whether
+        # p is a single value or a list of contrasts
+        spec = p[2:]
+        if len(spec) == 1:
+            spec = spec[0]
+        l2 = 1. / (spec + 1)
         l1 = 1 - l2
         
         # phase-factor
-        phi = np.zeros(u.shape, dtype=complex)
+        output_shape = list(u.shape)
+        output_shape[-1] = np.size(wavel)
+        phi = np.zeros(output_shape, dtype=complex)
         phi.real = np.cos(-2*np.pi*(u*dra + v*ddec)/wavel)
         phi.imag = np.sin(-2*np.pi*(u*dra + v*ddec)/wavel)
 
-        # optional effect of resolved individual sources
-        if p.size == 5:
-                th1, th2 = mas2rad(p[3]), mas2rad(p[4])
-                v1 = 2*j1(np.pi*th1*x)/(np.pi*th1*x)
-                v2 = 2*j1(np.pi*th2*x)/(np.pi*th2*x)
-        else:
-                v1 = np.ones(u.shape)
-                v2 = np.ones(u.shape)
-
-        cvis = l1 * v1 + l2 * v2 * phi
+        cvis = l1 + l2 * phi
+            
         phase = np.angle(cvis, deg=True)
         if return_cvis:
             return cvis
@@ -83,6 +78,15 @@ def phase_binary(u, v, wavel, p,return_cvis=False):
 def cp_loglikelihood(params,u,v,wavel,t3data,t3err,model='constant'):
     '''Calculate loglikelihood for closure phase data.
     Used both in the MultiNest and MCMC Hammer implementations.'''
+    
+    # hacky way to introduce priors
+    if (params[2] > 5000) or (params[2] < 0.):
+        return -np.inf
+    if (params[0] > 250.) or (params[0] < 0.):
+        return -np.inf
+    if (params[1] > 360.) or (params[1] < 0.):
+        return -np.inf
+    
     cps = cp_model(params,u,v,wavel,model=model)
     chi2 = np.sum(((t3data-cps)/t3err)**2)
     loglike = -chi2/2
@@ -95,6 +99,15 @@ def cp_loglikelihood_cov(params,u,v,wavel,t3data,cov_inv,model='constant'):
     '''Calculate loglikelihood for closure phase data. Uses the inverse 
     covariance matrix rather than the uncertainties
     Used both in the MultiNest and MCMC Hammer implementations.'''
+    
+    # hacky way to introduce priors
+    if (params[2] > 5000) or (params[2] < 0.):
+        return -np.inf
+    if (params[0] > 250.) or (params[0] < 0.):
+        return -np.inf
+    if (params[1] > 360.) or (params[1] < 0.):
+        return -np.inf
+    
     cps = cp_model(params,u,v,wavel,model=model)
     resids=t3data-cps
     # Loop through wavelengths and calculate the chi2 for each one and add them
@@ -111,13 +124,22 @@ def cp_loglikelihood_cov(params,u,v,wavel,t3data,cov_inv,model='constant'):
 # =========================================================================
 # =========================================================================
 
-def cp_loglikelihood_proj(params,u,v,wavel,proj_t3data,proj_t3err,evects):
+def cp_loglikelihood_proj(params,u,v,wavel,proj_t3data,proj_t3err,proj,model='constant'):
     '''Calculate loglikelihood for projected closure phase data.
     Used both in the MultiNest and MCMC Hammer implementations.
     Here proj is the eigenvector array'''
-    cps = cp_model(params,u,v,wavel)
     
-    proj_mod_cps = project_cps(cps,evects)
+    # hacky way to introduce priors
+    if (params[2] > 5000) or (params[2] < 0.):
+        return -np.inf
+    if (params[0] > 250.) or (params[0] < 0.):
+        return -np.inf
+    if (params[1] > 360.) or (params[1] < 0.):
+        return -np.inf
+        
+    cps = cp_model(params,u,v,wavel,model=model)
+    
+    proj_mod_cps = project_cps(cps,proj)
     
     chi2 = np.sum(((proj_t3data-proj_mod_cps)/proj_t3err)**2)
     
@@ -171,19 +193,16 @@ def cp_model(params,u,v,wavels,model='constant'):
             cons += coefficients[order]*xax**order
     else:
         raise NameError('Unknown model input to cp_model')
-
-    #If we have multiple wavelengths just repeat the u and v coords with different wavelengths
-    cps=[]
-    for ix,con in enumerate(cons):
-        phases = phase_binary(u,v,wavels[ix],[params[0],params[1],con])
-#        phases = np.reshape(phases,(ndata,3))
-        cps.append(np.sum(phases,axis=-1))
-    cps = np.array(cps)
-    if cps.ndim == 3:
-        cps=cps.transpose((1,2,0))
-    else:
-        cps = cps.transpose()
         
+    # vectorize the arrays to speed up multi-wavelength calculations
+    u = u[...,np.newaxis] # (ncp x n_runs x 3 x 1) or (ncp x 3 x 1)
+    v = v[...,np.newaxis] # (ncp x n_runs x 3 x 1) or (ncp x 3 x 1)
+    wavels = wavels[np.newaxis,np.newaxis,:] # (1 x 1 x 1 x nwav) or (1x1xnwav)
+    if u.ndim == 4:
+        wavels = wavels[np.newaxis]
+    phases = phase_binary(u,v,wavels,params)
+    cps = np.sum(phases,axis=-2)
+
     return cps
 
 # =========================================================================
@@ -216,26 +235,37 @@ def hammer(cpo,ivar=[52., 192., 1.53],ndim='Default',nwalcps=50,plot=False,
     Prior ranges introduce a flat (tophat) prior between the two values specified
     burn_in = the number of iterations to discard due to burn-in'''
     if ndim == 'Default':
-            ndim=len(ivar)
+        ndim=len(ivar)
       
     ivar = np.array(ivar)  # initial parameters for model-fit
 
-    p0 = [ivar + 0.1*ivar*np.random.rand(ndim) for i in range(nwalcps)] # initialise walcps in a ball
+    # Starting parameters for the walkers
+    p0 = []
+    scatter = np.zeros(ndim) + 0.75
+    scatter[0] = 0.1
+    scatter[1] = 0.1
+    for walker_ix in range(nwalcps):
+        p0.append(ivar+ivar*scatter*np.random.rand(ndim))
+#    p0 = [ivar + 0.1*ivar*np.random.rand(ndim) for i in range(nwalcps)] # initialise walcps in a ball
+#    p0 = [ivar + 0.75*ivar*np.random.rand(ndim) for i in range(nwalcps)] # initialise walcps in a ball
     print 'Running emcee now!'
     
-    cpo.t3err=np.sqrt(cpo.t3err**2+extra_error**2)
-    cpo.t3err*=err_scale
+    t3err=np.sqrt(cpo.t3err**2+extra_error**2)
+    t3err*=err_scale
 
     t0 = time.time()
     if projected ==False:
         sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood,
-            args=[cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err,model],threads=threads)
+            args=[cpo.u,cpo.v,cpo.wavel,cpo.t3data,t3err,model],threads=threads)
     elif use_cov:
-        sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_cov,
+       sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_cov,
             args=[cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.cov_inv,model],threads=threads)
     else:
+        proj_t3err = np.sqrt(cpo.proj_t3err**2 + extra_error**2)
+        proj_t3err *= err_scale
         sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_proj,
-            args=[cpo.u,cpo.v,cpo.wavel,cpo.proj_t3data,cpo.proj_t3err,cpo.proj],threads=threads)
+            args=[cpo.u,cpo.v,cpo.wavel,cpo.proj_t3data,proj_t3err,cpo.proj,model],threads=threads)
+ 
     sampler.run_mcmc(p0, niters)
     tf = time.time()
 
@@ -337,9 +367,9 @@ def hammer(cpo,ivar=[52., 192., 1.53],ndim='Default',nwalcps=50,plot=False,
 # =========================================================================
 # =========================================================================
 
-def nest(cpo,paramlimits=[20.,250.,0.,360.,1.0001,10],ndim=3,resume=False,eff=0.3,multi=True,
+def nest(cpo,paramlimits=[20.,250.,0.,360.,1.0001,10],resume=False,eff=0.3,multi=True,
          err_scale=1.,extra_error=0.,plot=True,npoints=1000,logcrat_prior=True,
-         use_cov=False):
+         use_cov=False,projected=False,model='constant'):
 
     '''Default implementation of a MultiNest fitting routine for closure 
     phase data. Requires a closure phase cpo object, parameter limits and 
@@ -360,32 +390,54 @@ def nest(cpo,paramlimits=[20.,250.,0.,360.,1.0001,10],ndim=3,resume=False,eff=0.
     '''
     import pymultinest
     
-    if logcrat_prior:
-        def myprior(cube, ndim, n_params,paramlimits=paramlimits,kpo=0):
-            cube[0] = cube[0]*(paramlimits[1] - paramlimits[0])+paramlimits[0]
-            cube[1] = cube[1]*(paramlimits[3] - paramlimits[2])+paramlimits[2]
-            cube[2] = 10**(cube[2]*(np.log10(paramlimits[5]) - np.log10(paramlimits[4]))+np.log10(paramlimits[4]))
+    if projected:
+        proj_t3err = np.sqrt(cpo.proj_t3err**2 + extra_error**2)
+        proj_t3err *= err_scale
     else:
-        def myprior(cube, ndim, n_params,paramlimits=paramlimits,kpo=0):
-            cube[0] = cube[0]*(paramlimits[1] - paramlimits[0])+paramlimits[0]
-            cube[1] = cube[1]*(paramlimits[3] - paramlimits[2])+paramlimits[2]
-            cube[2] = cube[2]*(paramlimits[5] - paramlimits[4])+paramlimits[4]
-
-    if use_cov:
-        def myloglike(cube, ndim, n_params):
-            loglike = cp_loglikelihood_cov(cube[0:3],cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.cov_inv)
-            return loglike
-
-    else:
-        def myloglike(cube, ndim, n_params):
-            loglike = cp_loglikelihood(cube[0:3],cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err)
-            return loglike
+        t3err=np.sqrt(cpo.t3err**2+extra_error**2)
+        t3err*=err_scale
     
-    cpo.t3err=np.sqrt(cpo.t3err**2+extra_error**2)
-    cpo.t3err*=err_scale
+    if logcrat_prior:
+        def myprior(cube,ndim, n_params,paramlimits=paramlimits):
+            cube[0] = cube[0]*(paramlimits[1] - paramlimits[0])+paramlimits[0]
+            cube[1] = cube[1]*(paramlimits[3] - paramlimits[2])+paramlimits[2]
+            for ix in range(n_params-2):
+                cube[ix+2] = 10**(cube[ix+2]*(np.log10(paramlimits[5]) - np.log10(paramlimits[4]))+np.log10(paramlimits[4]))
+    else:
+        def myprior(cube,ndim, n_params,paramlimits=paramlimits):
+            cube[0] = cube[0]*(paramlimits[1] - paramlimits[0])+paramlimits[0]
+            cube[1] = cube[1]*(paramlimits[3] - paramlimits[2])+paramlimits[2]
+            for ix in range(n_params-2):
+                cube[ix+2] = cube[ix+2]*(paramlimits[5] - paramlimits[4])+paramlimits[4]
+    
+    if projected:
+        def myloglike(cube,ndim, n_params):
+            loglike = cp_loglikelihood_proj(cube[0:n_params],cpo.u,cpo.v,cpo.wavel,
+                                        cpo.proj_t3data,proj_t3err,cpo.proj,model=model)
+            return loglike
 
-    parameters = ['Separation','Position Angle','Contrast']
+    elif use_cov:
+        def myloglike(cube,ndim, n_params):
+            loglike = cp_loglikelihood_cov(cube[0:n_params],cpo.u,cpo.v,cpo.wavel,
+                                           cpo.t3data,cpo.cov_inv,model=model)
+            return loglike
+
+    else:
+        def myloglike(cube,ndim, n_params):
+            loglike = cp_loglikelihood(cube[0:n_params],cpo.u,cpo.v,cpo.wavel,cpo.t3data,t3err,model=model)
+            return loglike
+
+    # How many parameters?
+    if model == 'constant':
+        parameters = ['Separation','Position Angle','Contrast Ratio']
+    elif model == 'free':
+        parameters = ['Separation','Position Angle']
+        parameters.extend(len(cpo.wavel)*['Contrast Ratio'])
+    else:
+        raise Exception('Model not yet implemented in nest!')
+        
     n_params = len(parameters)
+    ndim = n_params
     
     #Check that the "chains" directory exists (which multinest needs)
     if os.path.exists(os.getcwd()+'/chains/') ==False:
@@ -414,23 +466,14 @@ def nest(cpo,paramlimits=[20.,250.,0.,360.,1.0001,10],ndim=3,resume=False,eff=0.
     print
     print "-" * 30, 'ANALYSIS', "-" * 30
     print "Global Evidence:\n\t%.15e +- %.15e" % ( s['global evidence'], s['global evidence error'] )
+    print '' 
+    
     params = s['marginals']
-
-    bestsep = params[0]['median']
-    seperr = params[0]['sigma']
-
-    bestth = params[1]['median']
-    therr = params[1]['sigma']
-
-    bestcon = params[2]['median']
-    conerr = params[2]['sigma']
+    print_line="{0}: {1:.3F} pm {2:.3F}"
     
-    print ''
-
-    print 'Separation',bestsep,'pm',seperr
-    print 'Position angle',bestth,'pm',therr
-    print 'Contrast ratio',bestcon,'pm',conerr
-    
+    for param_ix in range(n_params):
+        print print_line.format(parameters[param_ix],params[param_ix]['median'],
+                                params[param_ix]['sigma'])    
     if plot:
         p = pymultinest.PlotMarginalModes(a)
         plt.figure(figsize=(5*n_params, 5*n_params))
@@ -535,7 +578,8 @@ def detec_sim_loopfit_proj(everything):
             # We want the difference in chi2 between the binary and null hypothesis.
             #  i.e. using rnd_cp for the single star and rnd_cp-bin_cp for the binary
             #  but this simplifies to the following equation
-            chi2_diff = np.sum((proj_resids**2 - proj_rnd_cp**2)/ everything['error'][...,np.newaxis]**2,axis=tuple(range(ndim)))
+            chi2_diff = np.sum((proj_resids**2 - proj_rnd_cp**2)/ everything['error'][...,np.newaxis]**2,
+                               axis=tuple(range(ndim)))
             
 #            chi2_sngl = np.sum(np.sum((((rnd_cp)/ everything['error'][:,:,np.newaxis])**2),axis=0),axis=0)
 #            chi2_binr = np.sum(np.sum((((rnd_cp-bin_cp[:,:,np.newaxis]) / everything['error'][:,:,np.newaxis])**2),axis=0),axis=0)
@@ -644,7 +688,8 @@ def detec_limits(cpo,nsim=2000,nsep=32,nth=20,ncon=32,smin='Default',smax='Defau
         #use full multivariate gaussian with sample covariance to get rands. Dont use with projected!
         rands=np.zeros((n_clps*n_runs,nsim))
         for run in range(n_runs):
-            rands[n_clps*(run):n_clps*(run+1),:]=np.transpose(np.random.multivariate_normal(np.zeros(n_clps),np.atleast_3d(cpo.sample_cov)[:,:,run],(nsim)))
+            rands[n_clps*(run):n_clps*(run+1),:]=np.transpose(np.random.multivariate_normal(np.zeros(n_clps),
+                             np.atleast_3d(cpo.sample_cov)[:,:,run],(nsim)))
     else:
         rands = np.random.normal(size=rands_shape)
     
@@ -820,6 +865,8 @@ def brute_force_chi2_grid_proj(everything):
         for k,con in enumerate(everything['cons']):
             mod_cps = cp_model([sep,th,con],everything['u'],everything['v'],everything['wavel'])
             #project and take independent clps
+            # THIS NEEDS TO BE FIXED
+            proj_bin_cps = project_cps(mod_cps,proj)
             mod_cps=np.reshape(mod_cps,(len(mod_cps)/n_runs,n_runs),order='F')
             proj_bin_cp=np.transpose(everything['proj']).dot(mod_cps)
             proj_bin_cp=proj_bin_cp[0:n_clps,:]
@@ -921,7 +968,8 @@ def brute_force_detec_limits(cpo,nsim=100,nsep=32,nth=20,ncon=32,smin='Default',
         #use full multivariate gaussian with sample covariance to get rands
         rands=np.zeros((n_clps*n_runs,nwav,nsim))
         for run in range(n_runs):
-            rands[n_clps*(run):n_clps*(run+1),0,:]=np.transpose(np.random.multivariate_normal(np.zeros(n_clps),cpo.sample_cov,(nsim)))
+            rands[n_clps*(run):n_clps*(run+1),0,:]=np.transpose(
+                np.random.multivariate_normal(np.zeros(n_clps),cpo.sample_cov,(nsim)))
     else:
         rands = np.random.randn(ndata,nwav,nsim)
     error=np.reshape(error,[ndata,nwav])
@@ -1126,16 +1174,14 @@ def chi2_grid_cov(everything):
     
 def chi2_grid_proj(everything):
     '''Function for multiprocessing, does 2d chi2 grid for coarse_grid, with projected data'''
-    cpo=everything['cpo']
-    data_cp=cpo.proj_t3data
-    chi2=np.zeros((len(everything['ths']),len(everything['cons'])))
-    sep=everything['sep']
+    cpo = everything['cpo']
+    chi2 = np.zeros((len(everything['ths']),len(everything['cons'])))
+    sep = everything['sep']
     for j,th in enumerate(everything['ths']):
         for k,con in enumerate(everything['cons']):
             mod_cps = cp_model([sep,th,con],cpo.u,cpo.v,cpo.wavel)
-            mod_cps=np.reshape(mod_cps,(cpo.n_clps,cpo.n_runs),order='F')
-            proj_mod_cps = (np.transpose(cpo.proj).dot(mod_cps))[:len(data_cp),:]
-            chi2[j,k]=np.sum(((data_cp.ravel()-proj_mod_cps.ravel())/cpo.proj_t3err.ravel())**2)
+            proj_mod_cps = project_cps(mod_cps,cpo.proj)
+            chi2[j,k]=np.sum(((cpo.proj_t3data-proj_mod_cps)/cpo.proj_t3err)**2)
     return chi2
 
  # =========================================================================
@@ -1235,7 +1281,7 @@ def coarse_grid(cpo,nsep=32,nth=20,ncon=32,smin='Default',smax='Default',
     chi2=np.array(chi2)
     best_ix=np.where(chi2 == np.amin(chi2))
     print np.amin(chi2)
-    #hack: if the best chi2 is at more than one location, take the first.
+    # If the best chi2 is at more than one location, take the first.
     best_params=[seps[best_ix[0][0]],ths[best_ix[1][0]],cons[best_ix[2][0]]]
     best_params=np.array(np.array(best_params).ravel())
     print 'Separation',best_params[0],'mas'
@@ -1359,11 +1405,13 @@ def multiple_companions_hammer(cpo,ivar=[[50., 0., 2.],[50.,90.,2.]],ndim='Defau
 
     t0 = time.time()
     if projected ==False:
-        sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_multiple, args=[cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err,model,ncomp],threads=threads)
+        sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_multiple,
+                        args=[cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err,model,ncomp],threads=threads)
     else:
         print 'I havent coded this yet...'
         raise NameError('cp_loglikelihood_multiple_proj doesnt exist')
-        sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_proj, args=[cpo.u,cpo.v,cpo.wavel,cpo.proj_t3data,cpo.proj_t3err,cpo.proj,ncomp],threads=threads)
+        sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_proj, 
+                    args=[cpo.u,cpo.v,cpo.wavel,cpo.proj_t3data,cpo.proj_t3err,cpo.proj,ncomp],threads=threads)
     sampler.run_mcmc(p0, niters)
     tf = time.time()
 
@@ -1510,7 +1558,8 @@ def hammer_spectrum(cpo,params,ivar=[1.53],nwalcps=50,plot=False,model='free',
     print 'Running emcee now!'
 
     t0 = time.time()
-    sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_spectrum, args=[params,cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err,model],threads=threads)
+    sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_spectrum,
+                    args=[params,cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err,model],threads=threads)
     sampler.run_mcmc(p0, niters)
     #x=cp_loglikelihood_spectrum(ivar,params,cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err,model)
     tf = time.time()
@@ -1660,7 +1709,8 @@ def multiple_companions_nest(cpo,paramlimits,n_comp=2.,resume=False,eff=0.3,mult
             for comp_ix in range(0,n_comp):
                 cube[3*comp_ix+0] = cube[3*comp_ix+0]*(paramlimits[comp_ix][1] - paramlimits[comp_ix][0])+paramlimits[comp_ix][0]
                 cube[3*comp_ix+1] = cube[3*comp_ix+1]*(paramlimits[comp_ix][3] - paramlimits[comp_ix][2])+paramlimits[comp_ix][2]
-                cube[3*comp_ix+2] = 10**(cube[3*comp_ix+2]*(np.log10(paramlimits[comp_ix][5]) - np.log10(paramlimits[comp_ix][4]))+np.log10(paramlimits[comp_ix][4]))            
+                cube[3*comp_ix+2] = 10**(cube[3*comp_ix+2]*(np.log10(paramlimits[comp_ix][5]) - 
+                    np.log10(paramlimits[comp_ix][4]))+np.log10(paramlimits[comp_ix][4]))            
             
     else:
         def myprior(cube, ndim, n_params,paramlimits=paramlimits,kpo=0,n_comp=n_comp):
