@@ -130,9 +130,9 @@ def cp_loglikelihood_proj(params,u,v,wavel,proj_t3data,proj_t3err,proj,model='co
     Here proj is the eigenvector array'''
     
     # hacky way to introduce priors
-    if (params[2] > 5000) or (params[2] < 0.):
-        return -np.inf
-    if (params[0] > 250.) or (params[0] < 0.):
+#    if (params[2] > 50000) or (params[2] < 0.):
+#        return -np.inf
+    if (params[0] > 350.) or (params[0] < 0.):
         return -np.inf
     if (params[1] > 360.) or (params[1] < 0.):
         return -np.inf
@@ -172,6 +172,8 @@ def cp_model(params,u,v,wavels,model='constant'):
              polynomial (of the form Sum[n] params[n+2]*(wavelength*1e6)**n )
      NOTE: This doesn't allow for nonzero size of each component!'''
     nwav=wavels.size
+    model_params = np.zeros(nwav+2)
+    model_params[0:2] = params[0:2]
     if model == 'constant':
         cons=np.repeat(params[2],nwav)
     elif model == 'linear':
@@ -179,7 +181,7 @@ def cp_model(params,u,v,wavels,model='constant'):
     elif model == 'ndof':
         ndof=params[2:].size
         wavs=np.linspace(np.min(wavels),np.max((wavels)),ndof)
-        f=interp.interp1d(wavs,params[2:],kind='cubic')
+        f=interp.interp1d(wavs,params[2:],kind='linear')
         cons=f(wavels)
     elif model == 'free':
         #no model, crat vs wav is free to vary.
@@ -193,14 +195,14 @@ def cp_model(params,u,v,wavels,model='constant'):
             cons += coefficients[order]*xax**order
     else:
         raise NameError('Unknown model input to cp_model')
-        
+    model_params[2:] = cons
     # vectorize the arrays to speed up multi-wavelength calculations
     u = u[...,np.newaxis] # (ncp x n_runs x 3 x 1) or (ncp x 3 x 1)
     v = v[...,np.newaxis] # (ncp x n_runs x 3 x 1) or (ncp x 3 x 1)
     wavels = wavels[np.newaxis,np.newaxis,:] # (1 x 1 x 1 x nwav) or (1x1xnwav)
     if u.ndim == 4:
         wavels = wavels[np.newaxis]
-    phases = phase_binary(u,v,wavels,params)
+    phases = phase_binary(u,v,wavels,model_params)
     cps = np.sum(phases,axis=-2)
 
     return cps
@@ -225,7 +227,6 @@ def hammer(cpo,ivar=[52., 192., 1.53],ndim='Default',nwalcps=50,plot=False,
            projected=False,niters=1000,threads=1,model='constant',sep_prior=None,
            pa_prior=None,crat_prior=None,err_scale=1.,extra_error=0.,
            use_cov=False,burn_in=0):
-
     import emcee
 
     '''Default implementation of emcee, the MCMC Hammer, for closure phase
@@ -248,7 +249,7 @@ def hammer(cpo,ivar=[52., 192., 1.53],ndim='Default',nwalcps=50,plot=False,
         p0.append(ivar+ivar*scatter*np.random.rand(ndim))
 #    p0 = [ivar + 0.1*ivar*np.random.rand(ndim) for i in range(nwalcps)] # initialise walcps in a ball
 #    p0 = [ivar + 0.75*ivar*np.random.rand(ndim) for i in range(nwalcps)] # initialise walcps in a ball
-    print 'Running emcee now!'
+    print('Running emcee now!')
     
     t3err=np.sqrt(cpo.t3err**2+extra_error**2)
     t3err*=err_scale
@@ -269,7 +270,7 @@ def hammer(cpo,ivar=[52., 192., 1.53],ndim='Default',nwalcps=50,plot=False,
     sampler.run_mcmc(p0, niters)
     tf = time.time()
 
-    print 'Time elapsed =', tf-t0,'s'
+    print('Time elapsed =', tf-t0,'s')
     
     chain=sampler.flatchain
     
@@ -307,7 +308,7 @@ def hammer(cpo,ivar=[52., 192., 1.53],ndim='Default',nwalcps=50,plot=False,
         chain[:,1]=ths
         chain[:,2:]=cs
     else:
-        print 'WARNING: Your priors eliminated all points!'
+        print('WARNING: Your priors eliminated all points!')
     
     meansep=np.mean(seps)
     dsep=np.std(seps)
@@ -318,12 +319,12 @@ def hammer(cpo,ivar=[52., 192., 1.53],ndim='Default',nwalcps=50,plot=False,
     meanc=np.mean(cs,axis=0)
     dc=np.std(cs,axis=0)
 
-    print 'Separation',meansep,'pm',dsep,'mas'
-    print 'Position angle',meanth,'pm',dth,'deg'
-    print 'Contrast',meanc[0],'pm',dc[0]
+    print('Separation',meansep,'pm',dsep,'mas')
+    print('Position angle',meanth,'pm',dth,'deg')
+    print('Contrast',meanc[0],'pm',dc[0])
     
     if model =='linear':
-        print 'Contrast2',meanc[1],'pm',dc[1]
+        print('Contrast2',meanc[1],'pm',dc[1])
         extra_pars=['Contrast ']
         extra_dims=['Ratio']
     elif model =='free':
@@ -357,7 +358,7 @@ def hammer(cpo,ivar=[52., 192., 1.53],ndim='Default',nwalcps=50,plot=False,
         plt.show()
   
     data={'sep':meansep,'delsep':dsep,'pa':meanth,'delpa':dth,'con':meanc,
-          'delcon':dc,'chain':sampler.chain,'seps':seps,'cleanchain':chain}
+          'delcon':dc,'chain':sampler.chain}
     
     # and clean up
     if threads >1:
@@ -459,21 +460,21 @@ def nest(cpo,paramlimits=[20.,250.,0.,360.,1.0001,10],resume=False,eff=0.3,multi
     toc = time.time()
 
     if toc-tic < 60.:
-        print 'Time elapsed =',toc-tic,'s'
+        print('Time elapsed =',toc-tic,'s')
     else: 
-        print 'Time elapsed =',(toc-tic)/60.,'mins'
+        print('Time elapsed =',(toc-tic)/60.,'mins')
 
-    print
-    print "-" * 30, 'ANALYSIS', "-" * 30
-    print "Global Evidence:\n\t%.15e +- %.15e" % ( s['global evidence'], s['global evidence error'] )
-    print '' 
+    print()
+    print("-" * 30, 'ANALYSIS', "-" * 30)
+    print("Global Evidence:\n\t%.15e +- %.15e" % ( s['global evidence'], s['global evidence error'] ))
+    print('')
     
     params = s['marginals']
     print_line="{0}: {1:.3F} pm {2:.3F}"
     
     for param_ix in range(n_params):
-        print print_line.format(parameters[param_ix],params[param_ix]['median'],
-                                params[param_ix]['sigma'])    
+        print(print_line.format(parameters[param_ix],params[param_ix]['median'],
+                                params[param_ix]['sigma']))
     if plot:
         p = pymultinest.PlotMarginalModes(a)
         plt.figure(figsize=(5*n_params, 5*n_params))
@@ -506,7 +507,9 @@ def detec_sim_loopfit(everything):
     ndim = len(everything['error'].shape)
     
     # This can be done once since it doesn't change with the binary params
-    resids = everything['error'][...,np.newaxis]*everything['rands']
+    # error should be ncp x nwav, rands should be ncp x nwav x n
+    err = everything['error']
+    resids = err[...,np.newaxis]*everything['rands']
     
     for j,th in enumerate(everything['ths']):
         for k,con in enumerate(everything['cons']):
@@ -524,7 +527,8 @@ def detec_sim_loopfit(everything):
 #            chi2_diff=chi2_binr-chi2_sngl
             detec_count[j,k]=(chi2_diff <(-0.0)).sum()#this counts the number of detections
             
-    #print 'done one separation'
+    #print('done one separation')
+#    print(err.shape,bin_cp.shape,rnd_cp.shape,everything['rands'].shape)
     return detec_count
 
 # =========================================================================
@@ -550,7 +554,7 @@ def detec_sim_loopfit_cov(everything):
             chi2_diff=chi2_binr-chi2_sngl
             detec_count[j,k]=(chi2_diff <(-0.0)).sum()#this counts the number of detections
             
-    #print 'done one separation'
+    #print('done one separation')
     return detec_count
 
 # =========================================================================
@@ -622,9 +626,9 @@ def detec_limits(cpo,nsim=2000,nsep=32,nth=20,ncon=32,smin='Default',smax='Defau
     #Note that the accuracy of these sims are limited by the number of fake clps sets you take.
      # e.g. if you only have 10 sims you can't get accuracy better than 10%
      # (and even then, you will need several times more than this to get a robust 10% limit).
-    print 'Detection limit resolution:',100./(nsim*nth),'%'
+    print('Detection limit resolution:',100./(nsim*nth),'%')
     if 100./(nsim*nth) > 0.01:
-        print 'It is recommended that you increase nsim if you want robust 99.9% detection limits.'
+        print('It is recommended that you increase nsim if you want robust 99.9% detection limits.')
 
     #------------------------
     # first, load your data!
@@ -654,12 +658,15 @@ def detec_limits(cpo,nsim=2000,nsep=32,nth=20,ncon=32,smin='Default',smax='Defau
         
     nwav=cpo.wavel.size
     ndata = cpo.u.shape[0]
-    u=np.repeat(np.resize(cpo.u,[ndata,3,1]),nwav,2).ravel()
-    v=np.repeat(np.resize(cpo.v,[ndata,3,1]),nwav,2).ravel()
-    wavel=np.repeat(np.repeat(np.resize(cpo.wavel,[1,1,nwav]),ndata,0),3,1).ravel()
+    # u=np.repeat(np.resize(cpo.u,[ndata,3,1]),nwav,2).ravel()
+    # v=np.repeat(np.resize(cpo.v,[ndata,3,1]),nwav,2).ravel()
+    # wavel=np.repeat(np.repeat(np.resize(cpo.wavel,[1,1,nwav]),ndata,0),3,1).ravel()
+    wavel = cpo.wavel
+    u = cpo.u
+    v = cpo.v
     
 
-    w = np.array(np.sqrt(u**2 + v**2))/wavel
+    w = np.array(np.sqrt(u**2 + v**2))/np.median(wavel)
 
     if smin == 'Default':
         smin = rad2mas(1./4/np.max(w))
@@ -692,17 +699,17 @@ def detec_limits(cpo,nsim=2000,nsep=32,nth=20,ncon=32,smin='Default',smax='Defau
                              np.atleast_3d(cpo.sample_cov)[:,:,run],(nsim)))
     else:
         rands = np.random.normal(size=rands_shape)
-    
- 
+    print(rands.shape,error.shape)
     all_vars=[]
-    print 'Setting up the big dictionary to store variables for loop'
+    print('Setting up the big dictionary to store variables for loop')
     for ix in range(nsep):
         everything={'sep':seps[ix],'cons':cons,'ths':ths, 'ix':ix,
             'nsep':nsep,'ncon':ncon,'nth':nth,'u':cpo.u,'v':cpo.v,'nsim':nsim,
             'rands':rands,'error':error,'wavel':cpo.wavel,
             'proj':proj,'n_clps':n_clps,'n_runs':n_runs,'cov_inv':cov_inv}
         all_vars.append(everything)
-    print 'Starting big loop over separations'
+
+    print('Starting big loop over separations')
     #------------------------
     # Run Monte Carlo
     #------------------------
@@ -739,9 +746,9 @@ def detec_limits(cpo,nsim=2000,nsep=32,nth=20,ncon=32,smin='Default',smax='Defau
     
     tf = time.time()
     if tf-tic > 60:
-        print 'Total time elapsed:',(tf-tic)/60.,'mins'
+        print('Total time elapsed:',(tf-tic)/60.,'mins')
     elif tf-tic <= 60:
-        print 'Total time elapsed:',tf-tic,'seconds'
+        print('Total time elapsed:',tf-tic,'seconds')
     nc, ns = int(ncon), int(nsep)
  
      # for each contrast and sep, how many detections?
@@ -990,7 +997,7 @@ def brute_force_detec_limits(cpo,nsim=100,nsep=32,nth=20,ncon=32,smin='Default',
     if threads ==0:
         toc=time.time()
         chi2=np.zeros((nsep,nth,ncon,nsim))
-        print 'Starting big loop over separations'
+        print('Starting big loop over separations')
         for ix in range(nsep):
             everything={'sep':seps[ix],'cons':cons,'ths':ths,'nsim':nsim,
                 'nsep':nsep,'ncon':ncon,'nth':nth,'u':cpo.u,'v':cpo.v,
@@ -1002,18 +1009,18 @@ def brute_force_detec_limits(cpo,nsim=100,nsep=32,nth=20,ncon=32,smin='Default',
                 chi2[ix,:,:,:]=brute_force_chi2_grid(everything)
             if (ix % 5) ==0:
                 tc=time.time()
-                print 'Done',ix,'. Time taken:',(tc-toc),'seconds'
+                print('Done',ix,'. Time taken:',(tc-toc),'seconds')
                 toc=tc
     else:
         all_vars=[]
-        print 'Making big array'
+        print('Making big array')
         for ix in range(nsep):
             everything={'sep':seps[ix],'cons':cons,'ths':ths,'nsim':nsim,
                 'nsep':nsep,'ncon':ncon,'nth':nth,'u':cpo.u,'v':cpo.v,
                 'sim_cps':sim_cps,'error':error,'wavel':cpo.wavel,'n_runs':n_runs,
                 'n_clps':n_clps,'proj':proj}
             all_vars.append(everything)
-        print 'Made big array for loop'
+        print('Made big array for loop')
         pool = Pool(processes=threads)
         if projected:
             chi2=pool.map(brute_force_chi2_grid_proj,all_vars)
@@ -1023,48 +1030,48 @@ def brute_force_detec_limits(cpo,nsim=100,nsep=32,nth=20,ncon=32,smin='Default',
         chi2=np.array(chi2)
     tf = time.time()
     if tf-tic > 60:
-        print 'Total time elapsed:',(tf-tic)/60.,'mins'
+        print('Total time elapsed:',(tf-tic)/60.,'mins')
     elif tf-tic <= 60:
-        print 'Total time elapsed:',tf-tic,'seconds'
+        print('Total time elapsed:',tf-tic,'seconds')
 
     #------------------------
     # Do L-M fit to get actual best fit params
     #------------------------
-    print 'Finding best parameters'
+    print('Finding best parameters')
     best_params=np.zeros((nsim,3))
     best_chi2_params=np.zeros((nsim,3))
     for ix in range(nsim):
         b_params_ix=np.where(chi2[:,:,:,ix]==np.amin(chi2[:,:,:,ix]))
         b_params=[seps[b_params_ix[0][0]],ths[b_params_ix[1][0]],cons[b_params_ix[2][0]]]
         best_chi2_params[ix,:]=np.array(b_params)
-    print 'Found best parameters'
+    print('Found best parameters')
     
     if lm_fit:
-        print 'Starting L-M fits.'
+        print('Starting L-M fits.')
         tic = time.time() # start the clock
         if threads == 0:
             for ix in range(nsim):
                 this_cpo=sim_cpos[ix]
                 [new_params,cov]=binary_fit(this_cpo,best_chi2_params[ix,:])
                 if ix % 50 ==0:
-                    print 'Done',ix
+                    print('Done',ix)
                 best_params[ix,:]=new_params
         else:
             all_vars=[]
             for ix in range(nsim):
-                #print 'Making big array:',ix,'of',nsep
+                #print('Making big array:',ix,'of',nsep)
                 everything={'sim_cpo':sim_cpos[ix],'best_chi2_params':best_chi2_params[ix,:]}
                 all_vars.append(everything)
-            print 'Using',threads,'cores'
+            print('Using',threads,'cores')
             pool = Pool(processes=threads)
             best_params=pool.map(lmfit,all_vars)
             pool.close()
      
         tf = time.time()
         if tf-tic > 60:
-            print 'Total time elapsed:',(tf-tic)/60.,'mins'
+            print('Total time elapsed:',(tf-tic)/60.,'mins')
         elif tf-tic <= 60:
-            print 'Total time elapsed:',tf-tic,'seconds'
+            print('Total time elapsed:',tf-tic,'seconds')
     else:
         best_params=best_chi2_params
 
@@ -1089,9 +1096,9 @@ def brute_force_detec_limits(cpo,nsim=100,nsep=32,nth=20,ncon=32,smin='Default',
     ndetec=0*cumsum_detec
     for ix in range(nsep):
         if maxdetec[ix]==0:
-            print 'No sims for sep '+str(seps[ix])+'mas'
+            print('No sims for sep '+str(seps[ix])+'mas')
         else:
-            print str(maxdetec[ix])+" in "+str(seps[ix])+" bin."
+            print(str(maxdetec[ix])+" in "+str(seps[ix])+" bin.")
             ndetec[ix,:]=cumsum_detec[ix,:]/maxdetec[ix]
 
     ndetec=1-ndetec
@@ -1127,7 +1134,7 @@ def brute_force_detec_limits(cpo,nsim=100,nsep=32,nth=20,ncon=32,smin='Default',
 
     if save == True:
         file = 'limit_lowc'+cpo.name+'.pick'
-        print file
+        print(file)
 
         myf = open(file,'w')
         pickle.dump(data,myf)
@@ -1259,7 +1266,7 @@ def coarse_grid(cpo,nsep=32,nth=20,ncon=32,smin='Default',smax='Default',
                 chi2[ix,:,:]=chi2_grid(everything)
             if (ix % 50) ==0:
                 tc=time.time()
-                print 'Done',ix,'. Time taken:',(tc-toc),'seconds'
+                print('Done',ix,'. Time taken:',(tc-toc),'seconds')
                 toc=tc
     else:
         all_vars=[]
@@ -1275,18 +1282,18 @@ def coarse_grid(cpo,nsep=32,nth=20,ncon=32,smin='Default',smax='Default',
             chi2=pool.map(chi2_grid,all_vars)
     tf = time.time()
     if tf-tic > 60:
-        print 'Total time elapsed:',(tf-tic)/60.,'mins'
+        print('Total time elapsed:',(tf-tic)/60.,'mins')
     elif tf-tic <= 60:
-        print 'Total time elapsed:',tf-tic,'seconds'
+        print('Total time elapsed:',tf-tic,'seconds')
     chi2=np.array(chi2)
     best_ix=np.where(chi2 == np.amin(chi2))
-    print np.amin(chi2)
+    print(np.amin(chi2))
     # If the best chi2 is at more than one location, take the first.
     best_params=[seps[best_ix[0][0]],ths[best_ix[1][0]],cons[best_ix[2][0]]]
     best_params=np.array(np.array(best_params).ravel())
-    print 'Separation',best_params[0],'mas'
-    print 'Position angle',best_params[1],'deg'
-    print 'Contrast Ratio',best_params[2]
+    print('Separation',best_params[0],'mas')
+    print('Position angle',best_params[1],'deg')
+    print('Contrast Ratio',best_params[2])
     # ---------------------------------------------------------------
     #                        sum over each variable so we can visualise it all
     # ---------------------------------------------------------------
@@ -1363,9 +1370,9 @@ def test_significance(cpo,params,projected=False):
         mod_cps=np.reshape(mod_cps,(cpo.n_clps,cpo.n_runs),order='F')
         mod_cps = (np.transpose(cpo.proj).dot(mod_cps))[:len(t3data),:]
     bin_chi2=np.sum(((t3data.ravel()-mod_cps.ravel())/t3err.ravel())**2)
-    print 'Chi2_null:',null_chi2
-    print 'Chi2_bin:',bin_chi2
-    print 'Significance:',np.sqrt(null_chi2-bin_chi2),'=sqrt(chi2_null-chi2_bin)'
+    print('Chi2_null:',null_chi2)
+    print('Chi2_bin:',bin_chi2)
+    print('Significance:',np.sqrt(null_chi2-bin_chi2),'=sqrt(chi2_null-chi2_bin)')
     return [null_chi2,bin_chi2]
  # =========================================================================
  # =========================================================================
@@ -1398,24 +1405,24 @@ def multiple_companions_hammer(cpo,ivar=[[50., 0., 2.],[50.,90.,2.]],ndim='Defau
     cpo.t3err=np.sqrt(cpo.t3err**2+extra_error**2)
     cpo.t3err*=err_scale
         
-    print 'Fitting for:',ncomp,'companions'
+    print('Fitting for:',ncomp,'companions')
 
     p0 = [ivar.ravel() + 0.1*ivar.ravel()*np.random.rand(ndim) for i in range(nwalcps)] # initialise walcps in a ball
-    print 'Running emcee now!'
+    print('Running emcee now!')
 
     t0 = time.time()
     if projected ==False:
         sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_multiple,
                         args=[cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err,model,ncomp],threads=threads)
     else:
-        print 'I havent coded this yet...'
+        print('I havent coded this yet...')
         raise NameError('cp_loglikelihood_multiple_proj doesnt exist')
         sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_proj, 
                     args=[cpo.u,cpo.v,cpo.wavel,cpo.proj_t3data,cpo.proj_t3err,cpo.proj,ncomp],threads=threads)
     sampler.run_mcmc(p0, niters)
     tf = time.time()
 
-    print 'Time elapsed =', tf-t0,'s'
+    print('Time elapsed =', tf-t0,'s')
     
     chain=sampler.flatchain
 
@@ -1475,10 +1482,10 @@ def multiple_companions_hammer(cpo,ivar=[[50., 0., 2.],[50.,90.,2.]],ndim='Defau
         meanc=np.mean(cs[:,c_ix,:],axis=0)
         dc=np.std(cs[:,c_ix],axis=0)
         
-        print 'Companion #'+str(c_ix)
-        print '    Separation',meansep,'pm',dsep,'mas'
-        print '    Position angle',meanth,'pm',dth,'deg'
-        print '    Contrast',meanc[0],'pm',dc[0]
+        print('Companion #'+str(c_ix))
+        print('    Separation',meansep,'pm',dsep,'mas')
+        print('    Position angle',meanth,'pm',dth,'deg')
+        print('    Contrast',meanc[0],'pm',dc[0])
         
         meanseps.append(meansep)
         dseps.append(dsep)
@@ -1488,7 +1495,7 @@ def multiple_companions_hammer(cpo,ivar=[[50., 0., 2.],[50.,90.,2.]],ndim='Defau
         dcs.append(dc)
 
         if model =='linear':
-            print '    Contrast2',meanc[1],'pm',dc[1]
+            print('    Contrast2',meanc[1],'pm',dc[1])
             extra_pars=['Contrast ']
             extra_dims=['Ratio']
         elif model =='free':
@@ -1546,7 +1553,7 @@ def hammer_spectrum(cpo,params,ivar=[1.53],nwalcps=50,plot=False,model='free',
     ivar = np.array(ivar)  # initial parameters for spectrum fit
     ndim=len(ivar)
     if ndim != 37:
-        print 'This is still a work in progress, and only works for 37 channel data (GPI default)'
+        print('This is still a work in progress, and only works for 37 channel data (GPI default)')
 
     p0 = [ivar + 0.1*ivar*np.random.rand(ndim) for i in range(nwalcps)] # initialise walcps in a ball
         
@@ -1555,7 +1562,7 @@ def hammer_spectrum(cpo,params,ivar=[1.53],nwalcps=50,plot=False,model='free',
     cpo.t3err=np.sqrt(cpo.t3err**2+extra_error**2)
     cpo.t3err*=err_scale
     
-    print 'Running emcee now!'
+    print('Running emcee now!')
 
     t0 = time.time()
     sampler = emcee.EnsembleSampler(nwalcps, ndim, cp_loglikelihood_spectrum,
@@ -1564,7 +1571,7 @@ def hammer_spectrum(cpo,params,ivar=[1.53],nwalcps=50,plot=False,model='free',
     #x=cp_loglikelihood_spectrum(ivar,params,cpo.u,cpo.v,cpo.wavel,cpo.t3data,cpo.t3err,model)
     tf = time.time()
 
-    print 'Time elapsed =', tf-t0,'s'
+    print('Time elapsed =', tf-t0,'s')
     
     chain=sampler.flatchain
     cs=chain
@@ -1581,13 +1588,13 @@ def hammer_spectrum(cpo,params,ivar=[1.53],nwalcps=50,plot=False,model='free',
         chain=np.zeros((len(cs),ndim))
         chain=cs
     else:
-        print 'WARNING: Your priors eliminated all points!'
+        print('WARNING: Your priors eliminated all points!')
     
     meanc=np.mean(cs,axis=0)
     dc=np.std(cs,axis=0)
-    print 'Mean contrast',np.mean(meanc),'pm',np.mean(dc)
+    print('Mean contrast',np.mean(meanc),'pm',np.mean(dc))
     for ix in range(ndim):
-        print 'Channel',ix,':',meanc[ix],'pm',dc[ix]
+        print('Channel',ix,':',meanc[ix],'pm',dc[ix])
     
     if plot==True:
 
@@ -1622,63 +1629,88 @@ def cp_loglikelihood_spectrum(spec_params,bin_params,u,v,wavel,t3data,t3err,mode
 # =========================================================================
 # =========================================================================
 
-def find_extra_error(params,cpo,err_scale=1.,dof='Default'):
+def find_extra_error(params,cpo,err_scale=1.,dof='Default',model='constant',
+                     projected=False):
     '''Finds the extra error needed for reduced chi squared to be 1. This is
     done by trying for many values of extra error and then interpolating.
     If dof is not set, then the degrees of freedom are taken as cpo.t3data.size.'''
     
-    modelt3phi=cp_model(params,cpo.u,cpo.v,cpo.wavel)
-    cpresid=modelt3phi-cpo.t3data
+    model_cps = cp_model(params,cpo.u,cpo.v,cpo.wavel,model=model)
+    if projected:
+        model_cps = project_cps(model_cps,cpo.proj)
+        data_cps = cpo.proj_t3data
+        cp_err = cpo.proj_t3err
+    else:
+        data_cps = cpo.t3data
+        cp_err = cpo.t3err
+        
+    cp_resids = data_cps - model_cps
+    
+    print('Max resid:'+str(np.max(np.abs(cp_resids))))
     
     n=1000 #number of extra errors to try.
-    errs=np.zeros((n))
-    errs[0]=0.
     chis_null=np.zeros((n))
     chis_bin=np.zeros((n))
-    for ix,er in enumerate(np.arange(-1.0,1.0,(1.+2.)/(n-1))):
-        errs[ix]=10.**(np.log10(300.)*er)
+    
+    extra_errors = np.logspace(-2,2,num=n)
+    
+    for ix,err in enumerate(extra_errors):
         
-        t3err=np.sqrt(cpo.t3err**2+errs[ix]**2)
-        t3err*=err_scale
+        # Calculate the closure phase uncertainties for this amount of extra_error
+        t3err = np.sqrt(cp_err**2+err**2)
+        t3err *= err_scale
         
-        chis_bin[ix]=np.sum(cpresid**2/t3err**2)
-        chis_null[ix]=np.sum(cpo.t3data**2/t3err**2)
+        chis_bin[ix]=np.sum(cp_resids**2/t3err**2)
+        chis_null[ix]=np.sum(data_cps**2/t3err**2)
         
     #scale to red.chi2
     if dof == 'Default':
-        dof=cpo.t3data.size
-    chis_bin/=(dof-3.) #-3 due to the fit
-    chis_null/=dof
+        dof = data_cps.size
+        
+    chis_bin /= (dof-3.) #-3 due to the fit
+    chis_null /= dof
     
-    #plt.plot(chis_bin,errs)
-    plt.errorbar(modelt3phi.ravel(),cpresid.ravel(),cpo.t3err.ravel(),fmt=None)
     print('Binary Chi2 with no extra error: '+str(np.max(chis_bin)))
     
-    #now find where it goes to 1.
-    func_bin=interp.interp1d(chis_bin,errs)
-    func_null=interp.interp1d(chis_null,errs)
+    #now find where it goes to 1. with interpolation
+    func_bin=interp.interp1d(chis_bin,extra_errors)
+    func_null=interp.interp1d(chis_null,extra_errors)
     try:
         err_bin=func_bin(1.0)
     except:
         if np.min(chis_bin) < 1.0:
-            print 'Binary Reduced Chi2 less than 1'
+            print('Binary Reduced Chi2 less than 1')
         else:
-            print 'Problem trying to calculate extra error.'
+            print('Problem trying to calculate extra error.')
         err_bin=0.
             
     try:
         err_null=func_null(1.0)
     except:
         if np.min(chis_null) < 1.0:
-            print 'Null Reduced Chi2 less than 1'
+            print('Null Reduced Chi2 less than 1')
         else:
-            print 'Problem trying to calculate extra error.'        
+            print('Problem trying to calculate extra error.')    
         err_null=0.
     
-    print 'Extra error needed:'
-    print 'Binary:',err_bin
-    print 'Null  :',err_null
-    return chis_bin,errs
+    print('Extra error needed:')
+    print('Binary:',err_bin)
+    print('Null  :',err_null)
+    
+    # Diagnostic plots    
+    cp_err_plot = np.sqrt(cp_err**2+err_bin**2)
+    
+    plt.clf()
+    plt.subplot(211)
+    plt.errorbar(model_cps.ravel(),data_cps.ravel(),cp_err_plot.ravel(),fmt='o')
+    plt.xlabel('Model CLP (deg)');plt.ylabel('Measured CLP (deg)')
+    plt.subplot(212)
+    plt.errorbar(model_cps.ravel(),cp_resids.ravel(),cp_err_plot.ravel(),fmt='o')
+    plt.xlabel('Model CLP (deg)');plt.ylabel('Residual CLP (deg)')
+    plt.tight_layout()
+    
+    return chis_bin,extra_errors
+
 # =========================================================================
 # =========================================================================
 
@@ -1752,14 +1784,14 @@ def multiple_companions_nest(cpo,paramlimits,n_comp=2.,resume=False,eff=0.3,mult
     toc = time.time()
 
     if toc-tic < 60.:
-        print 'Time elapsed =',toc-tic,'s'
+        print('Time elapsed =',toc-tic,'s')
     else: 
-        print 'Time elapsed =',(toc-tic)/60.,'mins'
+        print('Time elapsed =',(toc-tic)/60.,'mins')
 
     # json.dump(s, file('%s.json' % a.outputfiles_basename, 'w'), indent=2)
-    print
-    print "-" * 30, 'ANALYSIS', "-" * 30
-    print "Global Evidence:\n\t%.15e +- %.15e" % ( s['global evidence'], s['global evidence error'] )
+    print()
+    print("-" * 30, 'ANALYSIS', "-" * 30)
+    print("Global Evidence:\n\t%.15e +- %.15e" % ( s['global evidence'], s['global evidence error'] ))
     params = s['marginals']
 
     for comp_ix in range(n_comp):
@@ -1772,11 +1804,11 @@ def multiple_companions_nest(cpo,paramlimits,n_comp=2.,resume=False,eff=0.3,mult
         bestcon = params[comp_ix*3+2]['median']
         conerr = params[comp_ix*3+2]['sigma']
         
-        print ''
-        print 'Companion ',comp_ix,':'
-        print 'Separation',bestsep,'pm',seperr
-        print 'Position angle',bestth,'pm',therr
-        print 'Contrast ratio',bestcon,'pm',conerr
+        print('')
+        print('Companion ',comp_ix,':')
+        print('Separation',bestsep,'pm',seperr)
+        print('Position angle',bestth,'pm',therr)
+        print('Contrast ratio',bestcon,'pm',conerr)
         
     if plot:
         p = pymultinest.PlotMarginalModes(a)

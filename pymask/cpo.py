@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-import pyfits as pf
+import astropy.io.fits as pf
 import pickle
 import os
 import pdb
@@ -13,7 +13,7 @@ import time
 from scipy.io.idl import readsav
 import scipy
 
-from cp_tools import *
+from .cp_tools import *
 
 '''------------------------------------------------------------------------
 cpo.py - Python class for manipulating oifits format closure phase data.
@@ -29,10 +29,10 @@ class cpo():
 
         # if the file is a complete (kpi + kpd) structure
         # additional data can be loaded.
-        try:
+#        try:
             self.extract_from_oifits(oifits)
-        except:
-            print('Invalid file.')
+#        except:
+#            print('Invalid file.')
 
 
     def extract_from_oifits(self,filename):
@@ -173,42 +173,49 @@ class icpo():
         if tsize_targ is None:
             targ_ix = tsize <0
         else:
-            targ_ix = [False]*len(tsize)
-            for ix in range(tsize_targ):
-                targ_ix.extend(tsize == ix)
+            targ_ix = np.zeros(len(tsize),dtype=bool)
+            for ix in tsize_targ:
+                targ_ix[tsize == ix] = True
             
         # Default is that cals are all objects with tsize > 0
         if tsize_cal is None:
             cal_ix = tsize >0
         else:
-            cal_ix = []
-            for ix in range(tsize_cal):
-                cal_ix.extend(tsize == ix)
-                        
+            cal_ix = np.zeros(len(tsize),dtype=bool)
+            for ix in tsize_cal:
+                cal_ix[tsize == ix] = True
+                
         # Set up all the arrays
         # CPs
         n_data_per_obs = []
         cal_cps = []
         targ_cps = []
-        
+        print('Found {0:4d} bs files from IDL'.format(len(bs_files)))
         
         # Loop through and load them
         for ix,f in enumerate(bs_files):
             
             data = readsav(f)
             cps = np.angle(data['bs_all'],deg=True)
-            
+            mean_cp = data['cp']
+            err_cp = data['cp_sig']
+            # Add a wavelength dimension to non-IFU data
+            if mean_cp.ndim == 1:
+                cps = cps[np.newaxis,:]
+                mean_cp = mean_cp[np.newaxis,:]
+                err_cp = err_cp[np.newaxis,:]
+       
             # Check if targ or cal, then add the cps there
             if cal_ix[ix]:
                 if len(cal_cps) == 0:
                     cal_cps = cps
-                    mean_cal_cps = data['cp'][:,:,np.newaxis]
-                    std_cal_cps = data['cp_sig'][:,:,np.newaxis]
+                    mean_cal_cps = mean_cp[:,:,np.newaxis]
+                    std_cal_cps = err_cp[:,:,np.newaxis]
                 else:
                     cal_cps = np.append(cal_cps,cps,axis=2)
-                    mean_cal_cps = np.append(mean_cal_cps,data['cp'][:,:,np.newaxis],axis=2)
-                    std_cal_cps = np.append(std_cal_cps,data['cp_sig'][:,:,np.newaxis],axis=2)
-            else:
+                    mean_cal_cps = np.append(mean_cal_cps,mean_cp[:,:,np.newaxis],axis=2)
+                    std_cal_cps = np.append(std_cal_cps,err_cp[:,:,np.newaxis],axis=2)
+            elif targ_ix[ix]:
                 
                 if len(targ_cps) == 0:
                     # We have lots of setup to do for the first file, and then we'll reuse it for the rest
@@ -220,13 +227,21 @@ class icpo():
                     # u_ideal is the baseline divided by lambda so we can get them back from the first baseline like this
                     xy_coords = mf_data['xy_coords']
                     bl2h_ix = mf_data['bl2h_ix']
-                    wavs = ((float(xy_coords[0,bl2h_ix[0,0]]) - xy_coords[0,bl2h_ix[0,1]])/mf_data['u_ideal'][:,0] )
-    
+                    if 'u_ideal' in mf_data.keys(): # For the closing triangle approach
+                        wavs = ((float(xy_coords[0,bl2h_ix[0,0]]) - xy_coords[0,bl2h_ix[0,1]])/mf_data['u_ideal'][...,0] )
+                    else: # For the matched filter approach
+                        wavs = ((float(xy_coords[0,bl2h_ix[0,0]]) - xy_coords[0,bl2h_ix[0,1]])/mf_data['u'][...,0] )
+                    
+                    wavs = np.atleast_1d(wavs)
                     
                     # Get the uv coords from the matched filter file
                     # This should be the same at all wavelengths
-                    u_coords = data['u'][0,mf_data['bs2bl_ix']]*wavs[0] # in metres
-                    v_coords = data['v'][0,mf_data['bs2bl_ix']]*wavs[0] # in metres
+                    if data['u'].ndim ==1:
+                        u_coords = data['u'][mf_data['bs2bl_ix']]*wavs[0] # in metres
+                        v_coords = data['v'][mf_data['bs2bl_ix']]*wavs[0] # in metres
+                    else:
+                        u_coords = data['u'][0,mf_data['bs2bl_ix']]*wavs[0] # in metres
+                        v_coords = data['v'][0,mf_data['bs2bl_ix']]*wavs[0] # in metres
                     
                 # Rotate the uv coords
                 pa_rad = (pa[ix] - 0.5*del_pa[ix])*np.pi/180.
@@ -235,15 +250,15 @@ class icpo():
                 
                 if len(targ_cps) == 0:
                     targ_cps = [cps.transpose((1,2,0))] # keep this a list to make it easier to separate them
-                    mean_targ_cps = data['cp'][:,:,np.newaxis]
-                    std_targ_cps = data['cp_sig'][:,:,np.newaxis]
+                    mean_targ_cps = mean_cp[:,:,np.newaxis]
+                    std_targ_cps = err_cp[:,:,np.newaxis]
                     targ_u_coords = u_coords1[:,np.newaxis,:]
                     targ_v_coords = v_coords1[:,np.newaxis,:]
                 else:
 #                    targ_cps = np.append(targ_cps,cps,axis=2)
                     targ_cps.append(cps.transpose((1,2,0)))
-                    mean_targ_cps = np.append(mean_targ_cps,data['cp'][:,:,np.newaxis],axis=2)
-                    std_targ_cps = np.append(std_targ_cps,data['cp_sig'][:,:,np.newaxis],axis=2)
+                    mean_targ_cps = np.append(mean_targ_cps,mean_cp[:,:,np.newaxis],axis=2)
+                    std_targ_cps = np.append(std_targ_cps,err_cp[:,:,np.newaxis],axis=2)
                     targ_u_coords = np.append(targ_u_coords,u_coords1[:,np.newaxis,:],axis=1)
                     targ_v_coords = np.append(targ_v_coords,v_coords1[:,np.newaxis,:],axis=1)
 

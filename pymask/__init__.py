@@ -24,7 +24,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-import pyfits as pf
+import astropy.io.fits as pf
 import copy
 import pickle
 import os
@@ -38,15 +38,18 @@ ifft  = np.fft.ifft2
 
 dtor = np.pi/180.0
 
-import cp_tools
-from cp_tools import *
+# import .cp_tools
+from .cp_tools import *
 
-import cpo
-from cpo import *
+# import cpo
+# from cpo import *
+from .cpo import *
 
-import pol_tools
+# import pol_tools
+from .pol_tools import *
 
-import x_y_plot
+# import x_y_plot
+from .x_y_plot import *
 
 # -------------------------------------------------
 # set some defaults to display images that will

@@ -11,7 +11,7 @@ Also able to read the outputs from the IDL pipeline
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-import pyfits as pf
+import astropy.io.fits as pf
 import copy
 import pickle
 import sys
@@ -28,7 +28,7 @@ from scipy.optimize import leastsq
 from scipy.optimize import curve_fit
 import scipy.interpolate as interp
 
-from cp_tools import rad2mas,mas2rad
+from .cp_tools import rad2mas,mas2rad
 
 
 # =========================================================================
