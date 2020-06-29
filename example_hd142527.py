@@ -30,12 +30,12 @@ estimate_extra_error=False # Calculate how much extra uncertainty needs to be ad
 
 #################################
 #Load the oifits
-icpo=pymask.cpo(wdir+oif)
+cpo=pymask.cpo(wdir+oif)
 
 #################################
 #Now use the pymask routines for fitting and detection limits
 #Set the initial parameters and priors
-ip=[77.0,118.0,70.]
+ip=[48.82,76.06,75.28] # separation (mas), position angle (deg), contrast ratio
 sep_prior=[20,250] # mas
 pa_prior=[0,360] # degrees
 crat_prior=[5,500] # contrast ratio
@@ -52,7 +52,7 @@ if chi2_grid:
 
 # Use MCMC to get the parameters ( you may need to do "sudo pip install emcee")
 if get_params:
-    hammer_data=pymask.hammer(icpo,ivar=ip,nwalcps=50,niters=500,model='constant',
+    hammer_data=pymask.hammer(cpo,ivar=ip,nwalcps=50,niters=500,model='constant',
                        sep_prior=sep_prior,pa_prior=pa_prior,crat_prior=crat_prior,
                        err_scale=err_scale,extra_error=extra_error,plot=True)
 
@@ -66,7 +66,7 @@ if get_params:
 
 # DETECTION LIMITS
 if detec_lims:   
-    lims_data=pymask.detec_limits(icpo,threads=3,nsim=500,cmax=250,nsep=15,ncon=30,smax=75,
+    lims_data=pymask.detec_limits(cpo,threads=3,nsim=500,cmax=250,nsep=15,ncon=30,smax=75,
                                   nth=30,save=False,err_scale=err_scale,extra_error=extra_error)
 
 if nest:
