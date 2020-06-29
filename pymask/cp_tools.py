@@ -731,18 +731,15 @@ def detec_limits(cpo,nsim=2000,nsep=32,nth=20,ncon=32,smin='Default',smax='Defau
                 else: 
                     print('Estimated time remaining: %.2f seconds' % (remaining))
     else:
-        pool = Pool(processes=threads)
-        ndetec = np.zeros((nsep,nth,ncon))
-        if projected:
-            ndetec = pool.map(detec_sim_loopfit_proj,all_vars)
-        elif use_cov:
-            ndetec = pool.map(detec_sim_loopfit_cov,all_vars)
-        else:
-            ndetec = pool.map(detec_sim_loopfit,all_vars)
-        ndetec=np.array(ndetec)
-    
-        # and clean up
-        pool.close()
+        with Pool(threads) as pool:
+            ndetec = np.zeros((nsep,nth,ncon))
+            if projected:
+                ndetec = pool.map(detec_sim_loopfit_proj,all_vars)
+            elif use_cov:
+                ndetec = pool.map(detec_sim_loopfit_cov,all_vars)
+            else:
+                ndetec = pool.map(detec_sim_loopfit,all_vars)
+            ndetec=np.array(ndetec)
     
     tf = time.time()
     if tf-tic > 60:
@@ -1830,4 +1827,3 @@ def multiple_companions_nest(cpo,paramlimits,n_comp=2.,resume=False,eff=0.3,mult
     return [a,s]
 
 # =========================================================================    
-    
